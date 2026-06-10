@@ -1,0 +1,40 @@
+# Source Registry — HDFC Mutual Fund schemes (Groww HTML pages)
+amc: HDFC Mutual Fund
+language: en
+content_format: html
+
+sources:
+  - source_id: hdfc-mid-cap-direct-growth
+    url: https://groww.in/mutual-funds/hdfc-mid-cap-fund-direct-growth
+    document_type: scheme_page
+    scheme_name: HDFC Mid Cap Fund Direct Growth
+    scheme_category: mid-cap
+    plan_type: Direct Growth
+
+  - source_id: hdfc-equity-direct-growth
+    url: https://groww.in/mutual-funds/hdfc-equity-fund-direct-growth
+    document_type: scheme_page
+    scheme_name: HDFC Equity Fund Direct Growth
+    scheme_category: diversified-equity
+    plan_type: Direct Growth
+
+  - source_id: hdfc-focused-direct-growth
+    url: https://groww.in/mutual-funds/hdfc-focused-fund-direct-growth
+    document_type: scheme_page
+    scheme_name: HDFC Focused Fund Direct Growth
+    scheme_category: focused-equity
+    plan_type: Direct Growth
+
+  - source_id: hdfc-elss-tax-saver-direct-growth
+    url: https://groww.in/mutual-funds/hdfc-elss-tax-saver-fund-direct-plan-growth
+    document_type: scheme_page
+    scheme_name: HDFC ELSS Tax Saver Fund Direct Plan Growth
+    scheme_category: elss
+    plan_type: Direct Growth
+
+  - source_id: hdfc-large-cap-direct-growth
+    url: https://groww.in/mutual-funds/hdfc-large-cap-fund-direct-growth
+    document_type: scheme_page
+    scheme_name: HDFC Large Cap Fund Direct Growth
+    scheme_category: large-cap
+    plan_type: Direct Growth

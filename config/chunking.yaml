@@ -1,0 +1,7 @@
+chunking:
+  target_tokens: 500
+  max_tokens: 600
+  min_tokens: 100
+  overlap_tokens: 60
+  tokenizer: cl100k_base
+  context_prefix: "{scheme_name} — {section_heading}: "

@@ -1,0 +1,63 @@
+name: Daily Ingest Pipeline
+
+on:
+  schedule:
+    # 9:15 AM IST = 3:45 AM UTC
+    - cron: '45 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_reindex:
+        description: 'Re-index all URLs even if content hash unchanged'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ingest-pipeline
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements-ingest.txt
+
+      - name: Run ingestion pipeline
+        env:
+          EMBEDDING_PROVIDER: bge
+          VECTOR_STORE_MODE: cloud
+          CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
+          CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
+          CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
+          FORCE_REINDEX: ${{ github.event.inputs.force_reindex || 'false' }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python -m ingest run --summary /tmp/run-summary.json
+
+      - name: Upload run summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingest-run-summary-${{ github.run_id }}
+          path: /tmp/run-summary.json
+          retention-days: 30
+
+      - name: Upload raw HTML snapshots
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-html-${{ github.run_id }}
+          path: data/raw/
+          retention-days: 7
+          if-no-files-found: ignore

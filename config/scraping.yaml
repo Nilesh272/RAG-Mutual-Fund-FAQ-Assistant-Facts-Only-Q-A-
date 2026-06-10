@@ -1,0 +1,10 @@
+scraping:
+  user_agent: MF-FAQ-Bot/1.0
+  rate_limit_seconds: 1.0
+  timeout_seconds: 30
+  max_retries: 2
+  retry_backoff_seconds: [2, 4]
+  allowed_domain: groww.in
+  allowed_path_prefix: /mutual-funds/
+  save_raw_snapshots: true
+  raw_snapshot_dir: data/raw

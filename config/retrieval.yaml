@@ -1,0 +1,17 @@
+retrieval:
+  dense_weight: 0.7
+  top_k: 10
+  top_k_rerank: 5
+  similarity_threshold: 0.65
+
+section_keywords:
+  expense_ratio: ["expense ratio", "ter", "total expense"]
+  exit_load: ["exit load", "redemption", "exit fee"]
+  minimum_investment: ["minimum sip", "min sip", "minimum investment", "lumpsum"]
+  lock_in_period: ["lock-in", "lock in", "elss lock"]
+  riskometer: ["riskometer", "risk level"]
+  benchmark: ["benchmark", "index"]
+  fund_manager: ["fund manager", "manager"]
+  aum: ["aum", "assets under management"]
+  investment_objective: ["objective", "investment objective"]
+  fund_overview: ["overview", "about"]
