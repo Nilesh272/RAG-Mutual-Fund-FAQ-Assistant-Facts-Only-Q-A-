@@ -66,10 +66,9 @@ class EmbeddingService:
         store_raw = raw["vector_store"]
         store_config = VectorStoreConfig(
             provider=store_raw.get("provider", "chroma"),
-            mode=store_raw.get("mode", "local"),
+            mode=store_raw.get("mode", "cloud"),
             collection=store_raw.get("collection", "mf_faq_hdfc_groww"),
             distance=store_raw.get("distance", "cosine"),
-            persist_dir=store_raw.get("persist_dir", "data/chroma"),
             tenant=store_raw.get("tenant", ""),
             database=store_raw.get("database", "mf-faq-prod"),
             host=store_raw.get("host", "api.trychroma.com"),

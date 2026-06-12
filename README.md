@@ -8,21 +8,18 @@ A RAG-based facts-only FAQ assistant for HDFC mutual fund schemes, using Groww s
 
 ```
 ├── .github/workflows/daily-ingest.yml   # Scheduler (9:15 AM IST daily)
-├── config/
-│   ├── sources.yaml                     # Source Registry (5 Groww URLs)
-│   └── scraping.yaml                    # Scraping Service config
+├── api/                                 # FastAPI server (`python -m api`)
+├── config/                              # Sources, embedding, generation, compliance
 ├── phases/
 │   ├── phase1_corpus/                   # ✅ Scheduler + Scraping
-│   ├── phase2_rag_core/                 # ✅ Parse + Chunk + Embed + Index
-│   ├── phase3_generation/               # Intent + Generation (planned)
-│   ├── phase4_api/                      # Chat API (planned)
-│   ├── phase5_ui/                       # UI (planned)
-│   └── phase6_eval/                     # Eval + Hardening (planned)
-├── ingest/                              # CLI orchestrator
-├── data/raw/                            # HTML snapshots (gitignored)
-├── data/metadata/                       # Content hashes (gitignored)
-├── docs/                                # Architecture documents
-└── tests/phase1/                        # Phase 1 tests
+│   ├── phase2_rag_core/                 # ✅ Parse + Chunk + Embed + Retrieval
+│   ├── phase3_generation/               # ✅ Intent + Generation + Validator
+│   ├── phase4_api/                      # ✅ Chat API + Sessions
+│   ├── phase5_ui/web/                   # ✅ Next.js dark-theme chat UI
+│   └── phase6_eval/                     # ✅ Eval dataset + runner
+├── ingest/                              # Ingest CLI
+├── rag/                                 # Retrieval / validation / eval CLI
+└── docs/                                # Architecture documents
 ```
 
 ## Setup
@@ -30,71 +27,55 @@ A RAG-based facts-only FAQ assistant for HDFC mutual fund schemes, using Groww s
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-ingest.txt
+pip install -r requirements-api.txt
+
+cp .env.example .env   # add Chroma Cloud credentials
 ```
 
-## Run ingestion (Phase 1)
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `CHROMA_API_KEY` | Yes | Chroma Cloud API key |
+| `CHROMA_TENANT` | Yes | Chroma Cloud tenant ID |
+| `CHROMA_DATABASE` | Yes | e.g. `testDB` |
+| `OPENAI_API_KEY` | Optional | Only if `GENERATION_PROVIDER=openai` |
+
+## Run the chat app (Phases 4 + 5)
 
 ```bash
-# Full pipeline (scrape → parse → chunk → embed → index)
-# Default: BAAI/bge-small-en-v1.5 local embeddings
+# Ensure index is populated first
 python -m ingest run
 
-# Fast offline / CI tests (deterministic hash vectors)
-EMBEDDING_PROVIDER=hash python -m ingest run
+# Terminal 1 — FastAPI backend
+source .venv/bin/activate
+python -m api --host 127.0.0.1 --port 8000
 
-# Re-index after switching embedding model
-FORCE_REINDEX=true python -m ingest run
+# Terminal 2 — Next.js dark-theme UI
+cd phases/phase5_ui/web
+npm install
+npm run dev
+```
 
-# Validate index + golden queries (Phase 5.2 / 5.3)
+Open **http://localhost:3000** (frontend). API runs on **http://127.0.0.1:8000**.
+
+## Ingestion pipeline
+
+```bash
+python -m ingest run
 python -m rag validate-index
 python -m rag golden
-
-# Scrape only
-python -m ingest scrape-only
-
-# Write run summary JSON
-python -m ingest run --summary /tmp/run-summary.json
+python -m rag eval
 ```
 
 ## Scheduler (GitHub Actions)
 
-Workflow: `.github/workflows/daily-ingest.yml`
+Daily at **9:15 AM IST** — scrape → chunk → embed → Chroma Cloud upsert.
 
-| Setting | Value |
-|---------|-------|
-| Schedule | Daily 9:15 AM IST (`45 3 * * *` UTC) |
-| Manual run | Actions → Daily Ingest Pipeline → Run workflow |
-
-**Secrets (Chroma Cloud — Phase 5.3):** `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE`. Local dev uses `data/chroma` (no secrets). `OPENAI_API_KEY` only if `EMBEDDING_PROVIDER=openai`.
-
-### Chroma vector store (Phase 5.3)
-
-| Mode | When | Setup |
-|------|------|-------|
-| **local** (default) | Development | Vectors persist under `data/chroma` |
-| **cloud** | GitHub Actions / staging / prod | Set `VECTOR_STORE_MODE=cloud` + `CHROMA_*` secrets |
-| **ephemeral** | Unit tests | `VECTOR_STORE_MODE=ephemeral` (in-memory) |
-
-```bash
-# Ingest to Chroma Cloud (after provisioning secrets at https://www.trychroma.com/)
-export VECTOR_STORE_MODE=cloud
-export CHROMA_API_KEY=...
-export CHROMA_TENANT=...
-export CHROMA_DATABASE=mf-faq-prod
-FORCE_REINDEX=true python -m ingest run
-python -m rag validate-index
-```
+**Secrets:** `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE`
 
 ## Tests
 
 ```bash
-pytest tests/phase1 tests/phase2 -v
-
-# Run Phase 5.2 after ingest (live scrape + index + validate + golden)
-EMBEDDING_PROVIDER=hash FORCE_REINDEX=true python -m ingest run --summary /tmp/run-summary.json
-EMBEDDING_PROVIDER=hash python -m rag validate-index
-EMBEDDING_PROVIDER=hash python -m rag golden --output /tmp/golden-report.json
+pytest tests/ -v
 ```
 
 ## AMC & schemes in scope
@@ -104,6 +85,13 @@ EMBEDDING_PROVIDER=hash python -m rag golden --output /tmp/golden-report.json
 - HDFC Focused Fund Direct Growth
 - HDFC ELSS Tax Saver Fund Direct Plan Growth
 - HDFC Large Cap Fund Direct Growth
+
+## Known limitations
+
+- HTML-only Groww pages (no PDF KIM/SID in v1)
+- Five HDFC schemes only; other AMCs refused
+- Answers may lag page updates between daily 9:15 AM IST ingest runs
+- Extractive generation by default; set `GENERATION_PROVIDER=openai` for LLM answers
 
 ## Documentation
 

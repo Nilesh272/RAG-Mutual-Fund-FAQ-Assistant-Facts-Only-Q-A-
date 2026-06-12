@@ -39,7 +39,6 @@ def _write_configs(tmp_path: Path, project_root: Path) -> None:
                     "mode": "ephemeral",
                     "collection": "mf_faq_hdfc_groww",
                     "distance": "cosine",
-                    "persist_dir": "chroma",
                 },
             }
         ),

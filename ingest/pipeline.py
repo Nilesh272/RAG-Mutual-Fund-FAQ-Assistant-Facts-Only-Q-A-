@@ -120,7 +120,10 @@ class IngestPipeline:
             self._process_scrape_result(result, summary, scrape_only=scrape_only)
 
         if not scrape_only and summary.embeddings_upserted > 0:
-            summary.validation_report = self._run_index_validation().to_dict()
+            summary.validation_report = self._run_index_validation(
+                urls_fetched=summary.urls_fetched,
+                urls_failed=summary.urls_failed,
+            ).to_dict()
             if self.run_golden_queries:
                 summary.golden_query_results = self._run_golden_queries()
 
@@ -221,12 +224,14 @@ class IngestPipeline:
             "scheme_category": entry.scheme_category,
         }
 
-    def _run_index_validation(self) -> object:
+    def _run_index_validation(self, *, urls_fetched: int, urls_failed: int) -> object:
+        registry_size = len(self.scraper.registry.get_allowlisted_urls())
+        full_corpus = urls_fetched >= registry_size and urls_failed == 0
         validator = IngestValidator(
             self.embedder.vector_store,
             sources_path=self.project_root / "config" / "sources.yaml",
         )
-        return validator.validate()
+        return validator.validate(embedder=self.embedder, full_corpus=full_corpus)
 
     def _run_golden_queries(self) -> list[dict]:
         runner = GoldenQueryRunner(self.retriever)
@@ -235,6 +240,13 @@ class IngestPipeline:
 
     @staticmethod
     def _resolve_status(summary: RunSummary) -> RunStatus:
+        if (
+            summary.validation_report
+            and not summary.validation_report.get("passed")
+            and summary.urls_fetched >= 5
+            and summary.urls_failed == 0
+        ):
+            return "partial"
         if summary.urls_failed == 0:
             return "success"
         if summary.urls_fetched > 0:

@@ -11,10 +11,9 @@ embedding:
 
 vector_store:
   provider: chroma
-  mode: local          # local | cloud | ephemeral (tests)
+  mode: cloud          # cloud (default) | ephemeral (unit tests only)
   collection: mf_faq_hdfc_groww
   distance: cosine
-  persist_dir: data/chroma
   tenant: ""
   database: mf-faq-prod
   host: api.trychroma.com

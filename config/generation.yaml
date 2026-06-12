@@ -1,0 +1,6 @@
+generation:
+  # extractive = no LLM (default, tests) | openai = GPT via OPENAI_API_KEY
+  provider: extractive
+  model: gpt-4o-mini
+  max_regeneration_attempts: 2
+  max_sentences: 3

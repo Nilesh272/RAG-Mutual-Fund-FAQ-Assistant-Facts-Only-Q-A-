@@ -1,5 +1,8 @@
 name: Daily Ingest Pipeline
 
+# Scheduled pipeline: scrape Groww URLs → parse → chunk → BGE embed → upsert Chroma Cloud.
+# Runs every day at 9:15 AM IST (3:45 AM UTC).
+
 on:
   schedule:
     # 9:15 AM IST = 3:45 AM UTC
@@ -19,7 +22,13 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+
+    env:
+      EMBEDDING_PROVIDER: bge
+      VECTOR_STORE_MODE: cloud
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
+      INGEST_TRIGGER: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
 
     steps:
       - name: Checkout repository
@@ -31,19 +40,43 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: Restore scrape metadata cache
+        uses: actions/cache@v4
+        with:
+          path: data/metadata
+          key: ingest-source-state-${{ github.run_id }}
+          restore-keys: |
+            ingest-source-state-
+
+      - name: Cache BGE embedding model
+        uses: actions/cache@v4
+        with:
+          path: .cache/huggingface
+          key: bge-small-en-${{ hashFiles('requirements-ingest.txt') }}
+          restore-keys: |
+            bge-small-en-
+
       - name: Install dependencies
         run: pip install -r requirements-ingest.txt
 
-      - name: Run ingestion pipeline
+      - name: Scrape → chunk → embed → Chroma Cloud
         env:
-          EMBEDDING_PROVIDER: bge
-          VECTOR_STORE_MODE: cloud
           CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
           CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
           CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
           FORCE_REINDEX: ${{ github.event.inputs.force_reindex || 'false' }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-        run: python -m ingest run --summary /tmp/run-summary.json
+        run: |
+          echo "Pipeline: scrape (5 Groww URLs) → parse → chunk → BGE embed → Chroma upsert"
+          python -m ingest run --summary /tmp/run-summary.json
+
+      - name: Validate Chroma Cloud index
+        if: success()
+        env:
+          CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
+          CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
+          CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
+        run: python -m rag validate-index --min-chunks 1
 
       - name: Upload run summary
         if: always()
@@ -61,3 +94,10 @@ jobs:
           path: data/raw/
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: Save scrape metadata for next run
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: data/metadata
+          key: ingest-source-state-${{ github.run_id }}

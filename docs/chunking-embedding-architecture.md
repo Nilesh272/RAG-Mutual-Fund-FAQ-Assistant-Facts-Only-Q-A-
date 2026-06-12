@@ -293,13 +293,13 @@ sequenceDiagram
 }
 ```
 
-### 4.7 Vector Store Upsert Strategy (Chroma)
+### 4.7 Vector Store Upsert Strategy (Chroma Cloud)
 
-Vector storage uses **[Chroma](https://www.trychroma.com/)** — open-source search infrastructure for AI. Local development uses a persistent client; staging and production target **Chroma Cloud** (see §10 Phase 5.3).
+Vector storage uses **[Chroma Cloud](https://www.trychroma.com/)** exclusively. There is no local Chroma database in this project — all vectors live in a Cloud database and are accessed via `chromadb.CloudClient` (see §10).
 
 | Component | Value |
 |-----------|-------|
-| Vector store | **Chroma** — `PersistentClient` (dev) / `CloudClient` (staging, prod) |
+| Vector store | **Chroma Cloud** — `chromadb.CloudClient` (dev, staging, prod, GitHub Actions) |
 | Collection name | `mf_faq_hdfc_groww` |
 | ID field | `chunk_id` (string, used as Chroma record ID) |
 | Embedding dimensions | 384 (BGE-small, normalized) |
@@ -350,7 +350,8 @@ phases/phase2_rag_core/embedding/
 ├── embedder.py         # EmbeddingService class
 ├── bge_embedder.py     # BGE local embedder (primary)
 ├── openai_embedder.py  # OpenAI + hash embedders (optional)
-├── vector_store.py     # Chroma local + Cloud upsert logic (Phase 5.3)
+├── chroma_client.py    # CloudClient factory (Phase 5.3)
+├── vector_store.py     # Chroma Cloud upsert + search (Phase 5.3)
 └── models.py           # VectorRecord dataclass
 ```
 
@@ -447,12 +448,12 @@ embedding:
 
 vector_store:
   provider: chroma
-  mode: local          # local | cloud (auto: cloud when CHROMA_API_KEY set)
+  mode: cloud           # cloud (default) | ephemeral (unit tests only)
   collection: mf_faq_hdfc_groww
   distance: cosine
-  persist_dir: data/chroma
-  tenant: ""            # Chroma Cloud tenant (cloud mode)
-  database: mf-faq-prod # Chroma Cloud database (cloud mode)
+  tenant: ""            # override via CHROMA_TENANT env
+  database: mf-faq-prod # override via CHROMA_DATABASE env
+  host: api.trychroma.com
 ```
 
 **Environment variables:**
@@ -461,11 +462,11 @@ vector_store:
 |----------|---------|
 | `EMBEDDING_PROVIDER` | Override provider (`bge`, `hash`, `openai`) |
 | `OPENAI_API_KEY` | Only when `EMBEDDING_PROVIDER=openai` |
-| `CHROMA_API_KEY` | Chroma Cloud authentication (staging/prod) |
-| `CHROMA_TENANT` | Chroma Cloud tenant ID |
-| `CHROMA_DATABASE` | Chroma Cloud database name |
-| `CHROMA_HOST` | Optional Chroma Cloud host override |
-| `VECTOR_STORE_MODE` | Force `local` or `cloud` (default: infer from `CHROMA_API_KEY`) |
+| `CHROMA_API_KEY` | **Required** — Chroma Cloud API key |
+| `CHROMA_TENANT` | **Required** — Chroma Cloud tenant ID |
+| `CHROMA_DATABASE` | **Required** — Chroma Cloud database name |
+| `CHROMA_HOST` | Optional; defaults to `api.trychroma.com` |
+| `VECTOR_STORE_MODE` | `cloud` (default); `ephemeral` for unit tests only |
 | `FORCE_REINDEX` | Skip change detection when `true` |
 
 ---
@@ -514,19 +515,19 @@ Both services are invoked by `python -m ingest run` inside the **GitHub Actions*
 
 ---
 
-## 10. Phase 5.3 — Chroma Vector Store (Implemented)
+## 10. Phase 5.3 — Chroma Cloud Vector Store (Implemented)
 
-**Parent:** [RAG Architecture §5.6](./rag-architecture.md#56-vector-store--chroma-phase-53)
+**Parent:** [RAG Architecture §5.6](./rag-architecture.md#56-vector-store--chroma-cloud-phase-53)
 
-Phase 5.3 migrates the vector store layer to a unified **Chroma** backend: local persistent storage for development and **Chroma Cloud** for staging/production ingest and query. No implementation in this milestone — architecture and steps only.
+Phase 5.3 uses **Chroma Cloud only** — no local `PersistentClient` / `data/chroma` in dev or production. Ingest (GitHub Actions or laptop) scrapes Groww HTML, embeds chunks with BGE, and **upserts to Cloud** via `chromadb.CloudClient` and HTTPS to `api.trychroma.com`.
 
 ### 10.1 Goals
 
 | Goal | Rationale |
 |------|-----------|
-| Single vector store vendor | Replace Qdrant alternate path; simplify ops |
-| Dev/prod parity | Same `chromadb` client API locally and in Cloud |
-| Managed ingest target | GitHub Actions upserts directly to Chroma Cloud |
+| Cloud-only vectors | No local Chroma DB to install, sync, or back up |
+| Single source of truth | Dev, staging, and prod query the same Cloud collection schema |
+| Automated upload | Daily GitHub Actions pushes changed schemes to Cloud |
 | Metadata-native filtering | Scheme and section filters via Chroma `where` clauses |
 | Future sparse search | Chroma supports BM25/SPLADE sparse vectors for hybrid retrieval evolution |
 
@@ -534,17 +535,32 @@ Phase 5.3 migrates the vector store layer to a unified **Chroma** backend: local
 
 ```mermaid
 flowchart TB
-    subgraph DEV["Development"]
-        ING_DEV[python -m ingest run] --> PC[PersistentClient<br/>data/chroma]
-        RAG_DEV[python -m rag retrieve] --> PC
+    subgraph runners["Ingest runners"]
+        GHA[GitHub Actions<br/>daily 9:15 AM IST]
+        DEV[Local: python -m ingest run]
     end
 
-    subgraph CLOUD["Staging / Production"]
-        GHA[GitHub Actions ingest] --> CC[CloudClient<br/>Chroma Cloud]
-        API[Chat API Hybrid Retriever] --> CC
+    subgraph pipeline["On runner (not in Chroma)"]
+        SCRAPE[Scrape Groww HTML]
+        PARSE[Parse + chunk]
+        BGE[BGE embed 384-dim]
     end
 
-    PC -.->|same collection schema| CC
+    subgraph cloud["Chroma Cloud"]
+        CC[CloudClient]
+        DB[(Database: mf-faq-prod)]
+        COL[Collection: mf_faq_hdfc_groww]
+    end
+
+    subgraph query["Query path"]
+        API[Hybrid Retriever / rag CLI]
+    end
+
+    GHA --> SCRAPE
+    DEV --> SCRAPE
+    SCRAPE --> PARSE --> BGE -->|collection.upsert| CC
+    CC --> COL --> DB
+    API -->|dense search| CC
 ```
 
 ### 10.3 Implementation steps
@@ -553,30 +569,30 @@ flowchart TB
 |------|-------------|--------|
 | **5.3.1** | Create Chroma Cloud account; provision tenant + database; generate API key | `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE` secrets |
 | **5.3.2** | Add `vector_store.mode`, `tenant`, `database` to `config/embedding.yaml` | Config schema |
-| **5.3.3** | Refactor `vector_store.py`: `ChromaVectorStore` with `PersistentClient` / `CloudClient` factory; remove Qdrant branch | Code |
+| **5.3.3** | `vector_store.py` + `chroma_client.py`: `CloudClient` factory (no local runtime DB) | Code |
 | **5.3.4** | Update `EmbeddingService.from_config_files()` to select client by mode | Code |
 | **5.3.5** | Update `.github/workflows/daily-ingest.yml` with `CHROMA_*` secrets (remove `VECTOR_STORE_URL`) | CI |
 | **5.3.6** | Run `FORCE_REINDEX=true python -m ingest run` against Cloud to seed collection | ~50 vectors in `mf_faq_hdfc_groww` |
 | **5.3.7** | Extend `python -m rag validate-index` — Cloud connectivity, collection exists, allowlist URLs | Validation |
 | **5.3.8** | Add tests: `EphemeralClient` for unit tests; optional Cloud smoke test (manual / nightly) | Tests |
-| **5.3.9** | Update README with local vs Cloud setup instructions | Docs |
+| **5.3.9** | README documents Cloud-only setup + `CHROMA_*` secrets | Docs |
 
 ### 10.4 Chroma client selection
 
 ```python
-def create_chroma_client(config: VectorStoreConfig) -> chromadb.ClientAPI:
-    mode = os.getenv("VECTOR_STORE_MODE") or (
-        "cloud" if os.getenv("CHROMA_API_KEY") else config.mode or "local"
+def create_chroma_client(config: VectorStoreConfig, project_root: Path) -> chromadb.ClientAPI:
+    mode = os.getenv("VECTOR_STORE_MODE") or config.mode or "cloud"
+    if mode == "ephemeral":
+        return chromadb.EphemeralClient()  # unit tests only
+    return chromadb.CloudClient(
+        tenant=os.environ["CHROMA_TENANT"],
+        database=os.environ.get("CHROMA_DATABASE", config.database),
+        api_key=os.environ["CHROMA_API_KEY"],
+        cloud_host=os.getenv("CHROMA_HOST", config.host),
     )
-    if mode == "cloud":
-        return chromadb.CloudClient(
-            tenant=os.environ["CHROMA_TENANT"],
-            database=os.environ.get("CHROMA_DATABASE", config.database),
-            api_key=os.environ["CHROMA_API_KEY"],
-        )
-    persist_dir = project_root / config.persist_dir
-    return chromadb.PersistentClient(path=str(persist_dir))
 ```
+
+**Required for all non-test runs:** `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE` (GitHub Actions secrets or local shell exports).
 
 ### 10.5 Validation checks (post Phase 5.3)
 

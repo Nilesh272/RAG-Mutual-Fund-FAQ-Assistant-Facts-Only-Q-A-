@@ -5,6 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
+from config.load_env import load_env
 from ingest.pipeline import build_pipeline
 
 
@@ -17,9 +18,13 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_env()
     parser = argparse.ArgumentParser(
         prog="ingest",
-        description="Mutual Fund FAQ ingestion pipeline (Phase 1: scrape)",
+        description=(
+            "Mutual Fund FAQ ingestion pipeline: scrape → parse → chunk → "
+            "embed → Chroma Cloud upsert"
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -49,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     _configure_logging(args.verbose)
 
     pipeline = build_pipeline(project_root=args.project_root)
-    trigger = "scheduled" if __import__("os").getenv("GITHUB_ACTIONS") else "manual"
+    trigger = __import__("os").getenv("INGEST_TRIGGER", "manual")
 
     if args.command == "run":
         summary = pipeline.run(trigger=trigger)

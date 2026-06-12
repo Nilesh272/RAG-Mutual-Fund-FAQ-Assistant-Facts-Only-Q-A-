@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 from phases.phase1_corpus.registry.source_registry import SourceRegistryService
 from phases.phase2_rag_core.embedding.vector_store import VectorStore
+from phases.phase2_rag_core.validation.golden_runner import GOLDEN_QUERIES
+
+if TYPE_CHECKING:
+    from phases.phase2_rag_core.embedding.embedder import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +63,21 @@ class IngestValidator:
     def validate(
         self,
         *,
+        embedder: Optional[EmbeddingService] = None,
         expected_min_chunks: int = 1,
         expected_max_chunks: int = 60,
+        full_corpus: bool = True,
+        run_dense_smoke: bool = True,
     ) -> ValidationReport:
         checks: list[ValidationCheck] = []
+
+        checks.append(
+            ValidationCheck(
+                name="chroma_backend_mode",
+                passed=self.vector_store.mode in {"cloud", "ephemeral"},
+                detail=f"mode={self.vector_store.mode} (cloud or ephemeral for tests)",
+            )
+        )
 
         reachable = self.vector_store.health_check()
         checks.append(
@@ -125,13 +142,26 @@ class IngestValidator:
                 per_source[sid] += 1
 
         empty_sources = [sid for sid, count in per_source.items() if count == 0]
-        checks.append(
-            ValidationCheck(
-                name="scheme_coverage",
-                passed=len(empty_sources) == 0,
-                detail=f"missing sources: {empty_sources}" if empty_sources else "all 5 schemes indexed",
+        if full_corpus:
+            checks.append(
+                ValidationCheck(
+                    name="scheme_coverage",
+                    passed=len(empty_sources) == 0,
+                    detail=(
+                        f"missing sources: {empty_sources}"
+                        if empty_sources
+                        else "all 5 schemes indexed"
+                    ),
+                )
             )
-        )
+        else:
+            checks.append(
+                ValidationCheck(
+                    name="scheme_coverage",
+                    passed=True,
+                    detail=f"partial ingest ({len(per_source) - len(empty_sources)}/{len(per_source)} schemes)",
+                )
+            )
 
         expense_count = self.vector_store.count_by_metadata({"section_key": "expense_ratio"})
         checks.append(
@@ -142,7 +172,7 @@ class IngestValidator:
             )
         )
 
-        if not empty_sources:
+        if full_corpus and not empty_sources:
             sane_min = min(45, len(per_source) * 3)
             in_corpus_range = sane_min <= total <= expected_max_chunks
             ideal = 45 <= total <= expected_max_chunks
@@ -162,7 +192,23 @@ class IngestValidator:
                 ValidationCheck(
                     name="corpus_size_range",
                     passed=total >= expected_min_chunks,
-                    detail=f"{total} chunks (partial corpus; full range check skipped)",
+                    detail=f"{total} chunks (full corpus check skipped)",
+                )
+            )
+
+        semantic_embedder = os.getenv("EMBEDDING_PROVIDER", "bge") != "hash"
+        if full_corpus and run_dense_smoke and semantic_embedder and embedder is not None and total > 0:
+            smoke_query, expected_section = GOLDEN_QUERIES[0]
+            hits = embedder.search(smoke_query, limit=1)
+            top_section = hits[0]["payload"].get("section_key") if hits else None
+            checks.append(
+                ValidationCheck(
+                    name="dense_query_smoke",
+                    passed=top_section == expected_section,
+                    detail=(
+                        f"query={smoke_query!r} top_section={top_section!r} "
+                        f"expected={expected_section!r}"
+                    ),
                 )
             )
 

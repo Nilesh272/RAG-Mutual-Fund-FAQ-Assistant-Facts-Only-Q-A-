@@ -6,10 +6,12 @@ import logging
 import sys
 from pathlib import Path
 
+from config.load_env import load_env
 from phases.phase2_rag_core.retrieval.context_assembler import ContextAssembler
 from phases.phase2_rag_core.retrieval.hybrid_retriever import HybridRetriever
 from phases.phase2_rag_core.validation.golden_runner import GoldenQueryRunner
 from phases.phase2_rag_core.validation.ingest_validator import IngestValidator
+from phases.phase6_eval.runner import EvalRunner
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
         retriever.embedder.vector_store,
         sources_path=root / "config" / "sources.yaml",
     )
-    report = validator.validate(expected_min_chunks=args.min_chunks)
+    report = validator.validate(
+        embedder=retriever.embedder,
+        expected_min_chunks=args.min_chunks,
+    )
     print(json.dumps(report.to_dict(), indent=2))
     return 0 if report.passed else 1
 
@@ -55,6 +60,17 @@ def cmd_golden(args: argparse.Namespace) -> int:
         report.write_json(args.output)
     print(json.dumps(report.to_dict(), indent=2))
     return 0 if report.passed else 1
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    root = _project_root(args.project_root)
+    runner = EvalRunner.from_project_root(root)
+    dataset = root / "phases" / "phase6_eval" / "dataset" / "eval_queries.yaml"
+    report = runner.run(dataset)
+    if args.output:
+        report.write_json(args.output)
+    print(json.dumps(report.to_dict(), indent=2))
+    return 0 if report.passed_all else 1
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
@@ -85,6 +101,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_env()
     parser = argparse.ArgumentParser(
         prog="rag",
         description="RAG retrieval and validation CLI (Phase 5.2)",
@@ -113,6 +130,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     retrieve_parser.add_argument("query", type=str)
     retrieve_parser.set_defaults(func=cmd_retrieve)
+
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="Run Phase 6 evaluation dataset",
+    )
+    eval_parser.add_argument("--output", type=Path, help="Write JSON report to path")
+    eval_parser.set_defaults(func=cmd_eval)
 
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)

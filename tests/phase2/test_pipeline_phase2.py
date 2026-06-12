@@ -44,7 +44,6 @@ def test_full_pipeline_indexes_html(
                     "mode": "ephemeral",
                     "collection": "mf_faq_hdfc_groww",
                     "distance": "cosine",
-                    "persist_dir": "chroma",
                 },
             }
         ),

@@ -5,6 +5,13 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def test_vector_store_env(monkeypatch) -> None:
+    monkeypatch.setenv("VECTOR_STORE_MODE", "ephemeral")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "hash")
+    monkeypatch.delenv("CHROMA_API_KEY", raising=False)
+
+
 @pytest.fixture
 def project_root() -> Path:
     return PROJECT_ROOT

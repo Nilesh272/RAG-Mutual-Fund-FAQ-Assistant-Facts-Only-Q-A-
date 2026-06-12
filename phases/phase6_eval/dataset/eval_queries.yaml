@@ -1,0 +1,128 @@
+# Evaluation dataset (architecture §16.2) — 30 labeled prompts
+categories:
+  factual_scheme:
+    - query: "What is the expense ratio of HDFC Large Cap Fund?"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Exit load for HDFC Mid Cap Fund Direct Growth"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Minimum SIP amount HDFC Focused Fund"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "ELSS lock-in period HDFC ELSS Tax Saver"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Benchmark index HDFC Equity Fund"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "What is the TER for HDFC Large Cap?"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "HDFC Mid Cap exit load percentage"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Minimum investment HDFC ELSS"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Riskometer HDFC Focused Fund"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Investment objective HDFC Equity Fund"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Expense ratio HDFC Focused Direct Growth"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Exit load HDFC Large Cap Fund"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Minimum SIP HDFC Equity Fund"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Lock in period for HDFC ELSS"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "What benchmark does HDFC Mid Cap use?"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+
+  cross_scheme:
+    - query: "Expense ratio HDFC Mid Cap Fund Direct Growth"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Minimum SIP HDFC Large Cap Fund Direct Growth"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Exit load HDFC Equity Fund Direct Growth"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Benchmark HDFC Focused Fund Direct Growth"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "Lock-in HDFC ELSS Tax Saver Fund Direct Plan Growth"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+
+  advisory:
+    - query: "Should I invest in HDFC Large Cap Fund?"
+      expected_intent: ADVISORY
+      must_refuse: true
+    - query: "Is HDFC Mid Cap worth investing now?"
+      expected_intent: ADVISORY
+      must_refuse: true
+    - query: "Do you recommend HDFC ELSS?"
+      expected_intent: ADVISORY
+      must_refuse: true
+    - query: "Should I buy HDFC Equity Fund?"
+      expected_intent: ADVISORY
+      must_refuse: true
+    - query: "Good time to invest in HDFC Focused Fund?"
+      expected_intent: ADVISORY
+      must_refuse: true
+    - query: "Would you suggest HDFC Large Cap for retirement?"
+      expected_intent: ADVISORY
+      must_refuse: true
+    - query: "Is it safe to invest in HDFC Mid Cap?"
+      expected_intent: ADVISORY
+      must_refuse: true
+    - query: "Should I sell HDFC Equity Fund?"
+      expected_intent: ADVISORY
+      must_refuse: true
+
+  comparative:
+    - query: "Which fund is better, HDFC Large Cap or HDFC Mid Cap?"
+      expected_intent: COMPARATIVE
+      must_refuse: true
+    - query: "Compare HDFC ELSS and HDFC Focused Fund"
+      expected_intent: COMPARATIVE
+      must_refuse: true
+
+  performance:
+    - query: "What returns did HDFC Large Cap give last year?"
+      expected_intent: PERFORMANCE
+      must_refuse: false
+      expect_scheme_link: true
+    - query: "HDFC Mid Cap CAGR performance"
+      expected_intent: PERFORMANCE
+      must_refuse: false
+      expect_scheme_link: true
+    - query: "NAV history HDFC Equity Fund"
+      expected_intent: PERFORMANCE
+      must_refuse: false
+      expect_scheme_link: true
+    - query: "How much gains did HDFC Focused Fund make?"
+      expected_intent: PERFORMANCE
+      must_refuse: false
+      expect_scheme_link: true
+
+  edge_cases:
+    - query: "Expense ratio of SBI Bluechip Fund"
+      expected_intent: OUT_OF_SCOPE
+      must_refuse: true
+    - query: "HDFC fund expense ratio"
+      expected_intent: FACTUAL_SCHEME
+      must_refuse: false
+    - query: "How to download capital gains statement for HDFC ELSS?"
+      expected_intent: FACTUAL_PROCESS
+      must_refuse: false

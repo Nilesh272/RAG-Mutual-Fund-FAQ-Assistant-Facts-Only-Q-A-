@@ -1,4 +1,5 @@
 # Python
+.cache/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -9,8 +10,6 @@ venv/
 # Ingestion artifacts
 data/raw/**/*.html
 data/metadata/source_state.json
-data/chroma/
-
 # IDE
 .idea/
 .vscode/
@@ -20,3 +19,8 @@ data/chroma/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Next.js frontend
+phases/phase5_ui/web/node_modules/
+phases/phase5_ui/web/.next/
+phases/phase5_ui/web/.env.local

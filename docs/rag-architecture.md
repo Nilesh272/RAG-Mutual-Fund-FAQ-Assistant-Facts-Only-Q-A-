@@ -277,14 +277,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-ingest.txt
 
-      - name: Run ingestion pipeline
+      - name: Scrape → chunk → embed → Chroma Cloud
         env:
           EMBEDDING_PROVIDER: bge
+          VECTOR_STORE_MODE: cloud
           CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
           CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
           CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
           FORCE_REINDEX: ${{ github.event.inputs.force_reindex || 'false' }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          INGEST_TRIGGER: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
         run: python -m ingest run --summary /tmp/run-summary.json
+
+      - name: Validate Chroma Cloud index
+        if: success()
+        env:
+          EMBEDDING_PROVIDER: bge
+          VECTOR_STORE_MODE: cloud
+          CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
+          CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
+          CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
+        run: python -m rag validate-index --min-chunks 1
 
       - name: Upload run summary
         if: always()
@@ -319,11 +332,13 @@ jobs:
 | Variable | Purpose |
 |----------|---------|
 | `EMBEDDING_PROVIDER` | Set to `bge` (default) for local `BAAI/bge-small-en-v1.5` embeddings |
-| `CHROMA_API_KEY` | Chroma Cloud API key (required for staging/prod ingest) |
+| `CHROMA_API_KEY` | Chroma Cloud API key (**required** for all ingest and retrieval) |
 | `CHROMA_TENANT` | Chroma Cloud tenant ID |
-| `CHROMA_DATABASE` | Chroma Cloud database name (e.g. `mf-faq-prod`) |
-| `CHROMA_HOST` | Optional; defaults to Chroma Cloud endpoint |
-| `VECTOR_STORE_MODE` | `local` (dev) or `cloud` (staging/prod); auto-detected from `CHROMA_API_KEY` |
+| `CHROMA_DATABASE` | Chroma Cloud database name (e.g. `testDB`) |
+| `INGEST_TRIGGER` | `scheduled` (cron) or `manual` (`workflow_dispatch`) |
+| `GITHUB_RUN_ID` | GitHub Actions run ID for run summary correlation |
+| `CHROMA_HOST` | Optional; defaults to `api.trychroma.com` |
+| `VECTOR_STORE_MODE` | `cloud` (default); set to `ephemeral` only for unit tests |
 | `FORCE_REINDEX` | Re-index all URLs when `true` |
 | `OPENAI_API_KEY` | Only required if `EMBEDDING_PROVIDER=openai` |
 
@@ -345,10 +360,15 @@ jobs:
 }
 ```
 
-**Local development:** Run the same entry point without GitHub Actions:
+**Local development:** Run the same pipeline against **Chroma Cloud** (no local vector DB). Export `CHROMA_*` credentials, then:
 
 ```bash
+export VECTOR_STORE_MODE=cloud
+export CHROMA_API_KEY=...
+export CHROMA_TENANT=...
+export CHROMA_DATABASE=mf-faq-prod
 python -m ingest run
+python -m rag validate-index
 ```
 
 ### 5.2 Scraping Service
@@ -463,21 +483,25 @@ Chunking and embedding are documented in detail in **[Chunking & Embedding Archi
 | **Embedding** | Batch vectorization via `BAAI/bge-small-en-v1.5` (384-dim, local); upsert to Chroma collection `mf_faq_hdfc_groww` |
 | **Runs inside** | GitHub Actions `ingest` job (`python -m ingest run`) after scrape + parse |
 
-### 5.6 Vector Store — Chroma (Phase 5.3)
+### 5.6 Vector Store — Chroma Cloud (Phase 5.3)
 
-**Phase 5.3** standardizes the vector store on **[Chroma](https://www.trychroma.com/)** — open-source search infrastructure for AI (Apache 2.0). Chroma provides vector search, metadata filtering, and full-text capabilities in a single collection, which fits the small (~50 chunk) corpus and hybrid retrieval needs of this project.
+**Phase 5.3** uses **[Chroma Cloud](https://www.trychroma.com/)** as the **only** vector store for this project. There is **no local Chroma database** (`data/chroma` / `PersistentClient`) in dev, staging, or production. All ingest and retrieval traffic goes to a managed Cloud database via `chromadb.CloudClient`.
 
 | Environment | Chroma deployment | Client |
 |-------------|-------------------|--------|
-| **dev** | Local persistent store at `data/chroma` | `chromadb.PersistentClient` |
-| **staging / prod** | [Chroma Cloud](https://www.trychroma.com/) (managed, serverless) | `chromadb.CloudClient` |
-| **CI / unit tests** | Ephemeral or in-memory client | `chromadb.EphemeralClient` or temp `PersistentClient` |
+| **dev** | [Chroma Cloud](https://www.trychroma.com/) (same database or a dev database) | `chromadb.CloudClient` |
+| **staging / prod** | Chroma Cloud | `chromadb.CloudClient` |
+| **GitHub Actions** | Chroma Cloud (daily ingest upserts via API) | `chromadb.CloudClient` |
+| **unit tests only** | In-memory (not persisted) | `chromadb.EphemeralClient` via `VECTOR_STORE_MODE=ephemeral` |
 
-**Why Chroma for v1:**
+**Data upload model:** Groww HTML is scraped and processed on the runner (GitHub Actions or your laptop); only **embeddings + chunk text + metadata** are sent to Chroma Cloud through `collection.upsert()` over HTTPS (`api.trychroma.com`). Nothing is uploaded manually through the Chroma web UI.
 
-- Single vendor for vector + metadata search (no separate Qdrant deployment)
-- Local dev and Cloud share the same Python client API (`chromadb`)
+**Why Chroma Cloud for v1:**
+
+- No local vector DB to install, sync, or back up
+- Dev, CI, and prod all read/write the same Cloud collection schema
 - Metadata filters (`where`) align with scheme-level pre-filtering (`source_id`, `scheme_name`, `section_key`)
+- Managed ops: GitHub Actions pushes index updates daily at 9:15 AM IST
 - Future option: native sparse/BM25 vectors in Chroma for the hybrid retrieval sparse leg (Phase 5.2 currently uses in-memory BM25)
 
 **Collection schema:**
@@ -501,17 +525,17 @@ flowchart TB
     D --> E[Verify count for source_id]
 ```
 
-**Phase 5.3 implementation steps (architecture — not yet coded):**
+**Phase 5.3 — implemented (Cloud-only):**
 
-| Step | Task | Owner / notes |
-|------|------|---------------|
-| 5.3.1 | Provision Chroma Cloud tenant, database, and API key | Ops; store as GitHub secrets |
-| 5.3.2 | Extend `config/embedding.yaml` → `vector_store.mode`, `tenant`, `database` | Config |
-| 5.3.3 | Refactor `vector_store.py`: `PersistentClient` (local) + `CloudClient` (cloud); remove Qdrant path | `phases/phase2_rag_core/embedding/` |
-| 5.3.4 | Wire `CHROMA_*` env vars in `daily-ingest.yml` and Chat API runtime | GitHub Actions + API deploy |
-| 5.3.5 | One-time migration: `FORCE_REINDEX=true` ingest to populate Cloud collection | After 5.3.3 merge |
-| 5.3.6 | Extend `python -m rag validate-index` to assert Cloud collection reachability + point count | Validation |
-| 5.3.7 | Document local vs Cloud setup in README; add integration test with `EphemeralClient` | Docs + tests |
+| Step | Task | Status |
+|------|------|--------|
+| 5.3.1 | Provision Chroma Cloud tenant, database, and API key | Ops — GitHub secrets |
+| 5.3.2 | `config/embedding.yaml` → `vector_store.mode: cloud`, `tenant`, `database` | ✅ |
+| 5.3.3 | `vector_store.py` + `chroma_client.py` → `CloudClient` only (no local `PersistentClient` in runtime) | ✅ |
+| 5.3.4 | `CHROMA_*` env vars in `daily-ingest.yml` and local dev | ✅ |
+| 5.3.5 | `FORCE_REINDEX=true` ingest seeds Cloud collection `mf_faq_hdfc_groww` | One-time ops |
+| 5.3.6 | `python -m rag validate-index` — Cloud reachability + metadata checks | ✅ |
+| 5.3.7 | Unit tests use `VECTOR_STORE_MODE=ephemeral` only | ✅ |
 
 **Chroma Cloud connection (target pattern):**
 
@@ -879,7 +903,7 @@ Backend: Redis or in-memory dict (development); Redis/PostgreSQL (production).
 | Backend API | FastAPI (Python) |
 | LLM | OpenAI GPT-4o-mini / Azure OpenAI / local Llama 3 (with strict guardrails) |
 | Embeddings | HuggingFace `BAAI/bge-small-en-v1.5` via `sentence-transformers` (primary); OpenAI optional |
-| Vector DB | [Chroma](https://www.trychroma.com/) — local persistent (dev) + Chroma Cloud (staging/prod) |
+| Vector DB | [Chroma Cloud](https://www.trychroma.com/) only (`chromadb.CloudClient`; no local DB) |
 | Document parsing | BeautifulSoup, Trafilatura (HTML only; no PDF parser in v1) |
 | Reranker | `sentence-transformers` cross-encoder |
 | Session store | Redis |
@@ -954,7 +978,7 @@ flowchart TB
     EMB --> META[(Metadata Store)]
 ```
 
-**Environments:** `dev` (local Chroma `PersistentClient` + in-memory sessions), `staging` (Chroma Cloud + sample corpus), `prod` (Chroma Cloud + full corpus, monitoring).
+**Environments:** `dev`, `staging`, and `prod` all use **Chroma Cloud** for vectors (dev may use a separate Cloud database). Session store: in-memory (dev) or Redis (prod).
 
 ---
 
@@ -982,6 +1006,8 @@ Build 25–35 labeled Q&A pairs from the five Groww pages:
 - 8 advisory/comparative questions (must refuse)
 - 4 performance questions (Groww scheme page link only; no return figures)
 - 3 edge cases (scheme not in corpus, ambiguous scheme name, missing field on page)
+
+**Extended catalog:** See [Edge Cases — Evaluation Catalog](./edge-cases-evaluation.md) for 158 labeled cases across scope, intent, retrieval, compliance, ingestion, security, and multi-turn flows.
 
 ---
 
@@ -1020,10 +1046,14 @@ Incremental build milestones within Phase 2 / RAG Core:
 | Milestone | Status | Deliverables |
 |-----------|--------|--------------|
 | **5.0 — Scheduler + Scraping** | ✅ Done | Source Registry, `daily-ingest.yml`, Scraping Service, `python -m ingest scrape-only` |
-| **5.1 — Chunking + Embedding** | ✅ Done | Groww parser, structure-aware chunking, BGE embeddings, local Chroma upsert |
+| **5.1 — Chunking + Embedding** | ✅ Done | Groww parser, structure-aware chunking, BGE embeddings |
 | **5.2 — Hybrid retrieval + validation** | ✅ Done | BM25 + dense fusion, reranker, `validate-index`, golden query runner |
-| **5.3 — Chroma vector store** | ✅ Done | Chroma Cloud for staging/prod; unified `vector_store.py`; `CHROMA_*` secrets; see §5.6 |
-| **5.4 — Generation** | 📋 Planned | Intent classifier, constrained LLM, response validator (§6–9) |
+| **5.3 — Chroma Cloud vector store** | ✅ Done | Cloud-only index; `CloudClient`; `CHROMA_*` secrets; see §5.6 |
+| **5.4 — Generation** | ✅ Done | Intent classifier, extractive/OpenAI generator, response validator (§6–9) |
+| **Phase 3 — Generation** | ✅ Done | `phases/phase3_generation/` |
+| **Phase 4 — API & Threads** | ✅ Done | FastAPI `/api/chat`, session store, orchestrator |
+| **Phase 5 — UI** | ✅ Done | Minimal chat UI at `/` via `python -m api` |
+| **Phase 6 — Eval** | ✅ Done | `eval_queries.yaml`, `python -m rag eval` |
 
 ---
 
@@ -1035,7 +1065,7 @@ GitHub Actions Scheduler (daily 9:15 AM IST)
             └── Source Registry (URL list)
                     └── Parse & Normalize
                             └── Chunking Service → Embedding Service
-                                    └── Chroma (local / Cloud) + Metadata Store
+                                    └── Chroma Cloud + Metadata Store
                     └── Retriever
                             └── Context Assembler
                                     └── Generator

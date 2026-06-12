@@ -20,10 +20,9 @@ class EmbeddingConfig:
 @dataclass
 class VectorStoreConfig:
     provider: str = "chroma"
-    mode: str = "local"
+    mode: str = "cloud"
     collection: str = "mf_faq_hdfc_groww"
     distance: str = "cosine"
-    persist_dir: str = "data/chroma"
     tenant: str = ""
     database: str = "mf-faq-prod"
     host: str = "api.trychroma.com"

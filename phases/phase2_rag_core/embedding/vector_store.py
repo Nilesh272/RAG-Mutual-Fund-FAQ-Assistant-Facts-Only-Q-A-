@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -10,8 +11,13 @@ from phases.phase2_rag_core.embedding.models import UpsertResult, VectorRecord, 
 logger = logging.getLogger(__name__)
 
 
+def _is_dimension_mismatch(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "dimension" in message or "embedding size" in message or "vector size" in message
+
+
 class VectorStore:
-    """Chroma vector store — local PersistentClient, CloudClient, or EphemeralClient."""
+    """Chroma vector store — Chroma Cloud (default) or EphemeralClient (unit tests)."""
 
     def __init__(
         self,
@@ -29,10 +35,25 @@ class VectorStore:
         self._client = chroma_client or create_chroma_client(
             config, project_root, mode=self._mode
         )
-        self._collection = self._client.get_or_create_collection(
+        self._collection = self._get_or_create_collection()
+
+    def _collection_metadata(self) -> dict[str, str]:
+        return {"hnsw:space": self.config.distance}
+
+    def _get_or_create_collection(self):
+        return self._client.get_or_create_collection(
             name=self.config.collection,
-            metadata={"hnsw:space": self.config.distance},
+            metadata=self._collection_metadata(),
         )
+
+    def reset_collection(self) -> None:
+        """Drop and recreate the collection (e.g. after embedding dimension change)."""
+        logger.warning("Resetting Chroma collection %s", self.config.collection)
+        try:
+            self._client.delete_collection(self.config.collection)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Collection delete skipped: %s", exc)
+        self._collection = self._get_or_create_collection()
 
     @property
     def mode(self) -> str:
@@ -41,6 +62,10 @@ class VectorStore:
     @property
     def collection_name(self) -> str:
         return self.config.collection
+
+    @property
+    def is_cloud(self) -> bool:
+        return self._mode == "cloud"
 
     def health_check(self) -> bool:
         """Verify the Chroma collection is reachable."""
@@ -109,7 +134,13 @@ class VectorStore:
         )
         return self._format_chroma_results(results)
 
-    def upsert_for_source(self, source_id: str, records: list[VectorRecord]) -> UpsertResult:
+    def upsert_for_source(
+        self,
+        source_id: str,
+        records: list[VectorRecord],
+        *,
+        _retried: bool = False,
+    ) -> UpsertResult:
         try:
             deleted = self.delete_by_source_id(source_id)
             inserted = self.upsert(records)
@@ -129,6 +160,24 @@ class VectorStore:
                 verified=True,
             )
         except Exception as exc:  # noqa: BLE001
+            if (
+                not _retried
+                and _is_dimension_mismatch(exc)
+                and os.getenv("CHROMA_RESET_COLLECTION", "false").lower() == "true"
+            ):
+                logger.warning(
+                    "Dimension mismatch for %s; resetting collection and retrying",
+                    source_id,
+                )
+                self.reset_collection()
+                return self.upsert_for_source(source_id, records, _retried=True)
+
+            if _is_dimension_mismatch(exc):
+                logger.error(
+                    "Embedding dimension mismatch. Set CHROMA_RESET_COLLECTION=true "
+                    "and FORCE_REINDEX=true, then re-run ingest."
+                )
+
             logger.exception("Vector upsert failed for %s", source_id)
             return UpsertResult(
                 source_id=source_id,

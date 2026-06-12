@@ -24,7 +24,6 @@ def embedder(project_root: Path, tmp_path: Path, monkeypatch) -> EmbeddingServic
                     "mode": "ephemeral",
                     "collection": "test_mf_faq",
                     "distance": "cosine",
-                    "persist_dir": str(tmp_path / "chroma"),
                 },
             }
         ),

@@ -49,6 +49,10 @@ class GrowwParser:
         self._remove_noise(soup)
 
         sections: list[SectionBlock] = []
+        sections.extend(self._parse_groww_fund_details(soup, scrape_result, scheme_meta))
+        sections.extend(self._parse_groww_exit_load_summary(soup, scrape_result, scheme_meta))
+        sections.extend(self._parse_groww_benchmark_row(soup, scrape_result, scheme_meta))
+        sections.extend(self._parse_groww_lock_in(soup, scrape_result, scheme_meta))
         sections.extend(self._parse_heading_sections(soup, scrape_result, scheme_meta))
         sections.extend(self._parse_label_value_pairs(soup, scrape_result, scheme_meta))
 
@@ -82,6 +86,125 @@ class GrowwParser:
             content_hash=scrape_result.content_hash or "",
         )
 
+    def _parse_groww_fund_details(
+        self,
+        soup: BeautifulSoup,
+        scrape_result: ScrapeResult,
+        scheme_meta: dict,
+    ) -> list[SectionBlock]:
+        """Parse Groww fund summary cards (e.g. 'Expense ratio 0.99%')."""
+        sections: list[SectionBlock] = []
+        metric_patterns: list[tuple[str, str, re.Pattern[str]]] = [
+            (
+                "expense_ratio",
+                "Expense Ratio",
+                re.compile(r"^Expense ratio\s+(\d+(?:\.\d+)?%)$", re.IGNORECASE),
+            ),
+            (
+                "minimum_investment",
+                "Minimum Investment",
+                re.compile(r"^Min\. for SIP\s+(.+)$", re.IGNORECASE),
+            ),
+            (
+                "aum",
+                "AUM",
+                re.compile(r"^Fund size \(AUM\)\s+(.+)$", re.IGNORECASE),
+            ),
+        ]
+
+        for div in soup.find_all(class_=re.compile(r"fundDetails_gap4")):
+            text = self._normalize_text(div.get_text(" ", strip=True))
+            for section_key, heading, pattern in metric_patterns:
+                match = pattern.match(text)
+                if not match:
+                    continue
+                value = match.group(1).strip()
+                sections.append(
+                    self._make_block(
+                        scrape_result,
+                        scheme_meta,
+                        section_key,
+                        heading,
+                        value,
+                    )
+                )
+        return sections
+
+    def _parse_groww_exit_load_summary(
+        self,
+        soup: BeautifulSoup,
+        scrape_result: ScrapeResult,
+        scheme_meta: dict,
+    ) -> list[SectionBlock]:
+        """Parse current exit load rule (not tooltip definitions)."""
+        for container in soup.find_all(class_=re.compile(r"exitLoadStampDutyTax")):
+            text = self._normalize_text(container.get_text(" ", strip=True))
+            match = re.search(
+                r"(Exit load of \d+(?:\.\d+)?%[^.]*(?:within[^.]+)?)",
+                text,
+                re.IGNORECASE,
+            )
+            if match:
+                return [
+                    self._make_block(
+                        scrape_result,
+                        scheme_meta,
+                        "exit_load",
+                        "Exit Load",
+                        match.group(1),
+                    )
+                ]
+        return []
+
+    def _parse_groww_benchmark_row(
+        self,
+        soup: BeautifulSoup,
+        scrape_result: ScrapeResult,
+        scheme_meta: dict,
+    ) -> list[SectionBlock]:
+        for row in soup.find_all(class_=re.compile(r"investmentObjective_benchmarkRow")):
+            labels = row.find_all("span")
+            if len(labels) < 2:
+                continue
+            label = self._normalize_text(labels[0].get_text(" ", strip=True))
+            value = self._normalize_text(labels[1].get_text(" ", strip=True))
+            if "benchmark" in label.lower() and value:
+                return [
+                    self._make_block(
+                        scrape_result,
+                        scheme_meta,
+                        "benchmark",
+                        "Benchmark",
+                        value,
+                    )
+                ]
+        return []
+
+    def _parse_groww_lock_in(
+        self,
+        soup: BeautifulSoup,
+        scrape_result: ScrapeResult,
+        scheme_meta: dict,
+    ) -> list[SectionBlock]:
+        text = self._normalize_text(soup.get_text(" ", strip=True))
+        for pattern in (
+            r"(\d+\s*Y\s*Lock[- ]?in)",
+            r"(ELSS\s*•\s*\d+Y\s*Lock[- ]?in)",
+            r"(lock[- ]?in period[^.]{0,30}\d+\s*years?)",
+        ):
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return [
+                    self._make_block(
+                        scrape_result,
+                        scheme_meta,
+                        "lock_in_period",
+                        "Lock-in Period",
+                        match.group(1),
+                    )
+                ]
+        return []
+
     def _parse_heading_sections(
         self,
         soup: BeautifulSoup,
@@ -109,7 +232,7 @@ class GrowwParser:
                     content_parts.append(text)
 
             content = "\n".join(content_parts).strip()
-            if content:
+            if content and not self._is_tooltip_definition(content):
                 sections.append(
                     self._make_block(
                         scrape_result, scheme_meta, section_key, canonical_heading, content
@@ -221,8 +344,57 @@ class GrowwParser:
         return None
 
     @staticmethod
+    def _is_tooltip_definition(content: str) -> bool:
+        """Groww tooltip copy under metric headings — not the factual value."""
+        lowered = content.lower()
+        markers = (
+            "a fee payable to a mutual fund house",
+            "total percentage of a company's fund assets",
+            "percentage of your capital gains payable",
+            "form of tax payable for the purchase or sale",
+        )
+        if not any(marker in lowered for marker in markers):
+            return False
+        # Keep if a concrete value is also present (e.g. mixed blocks).
+        if re.search(r"\d+(?:\.\d+)?%", content):
+            return False
+        if re.search(r"rs\.?\s*\d", content, re.IGNORECASE):
+            return False
+        return True
+
+    @staticmethod
+    def _section_content_score(section_key: str, content: str) -> int:
+        """Prefer factual values over Groww tooltip definitions."""
+        score = 0
+        lowered = content.lower()
+        if re.search(r"\d+(?:\.\d+)?%", content):
+            score += 12
+        if re.search(r"rs\.?\s*\d", content, re.IGNORECASE):
+            score += 8
+        if section_key == "expense_ratio" and re.search(
+            r"expense ratio[:\s]+\d", content, re.IGNORECASE
+        ):
+            score += 20
+        if section_key == "exit_load" and "redeemed within" in lowered:
+            score += 20
+        if section_key == "minimum_investment" and re.search(
+            r"min\.?\s+for\s+sip", content, re.IGNORECASE
+        ):
+            score += 15
+        if section_key == "minimum_investment" and len(content) < 40:
+            score += 8
+        if section_key == "benchmark" and "index" in lowered:
+            score += 10
+        if "fee payable to a mutual fund house" in lowered:
+            score -= 25
+        if "total percentage of a company's fund assets" in lowered:
+            score -= 20
+        score += min(len(content), 180) // 60
+        return score
+
+    @staticmethod
     def _dedupe_sections(sections: list[SectionBlock]) -> list[SectionBlock]:
-        """Keep one block per section_key (prefer richest content)."""
+        """Keep one block per section_key (prefer factual metric content)."""
         best_by_key: dict[str, SectionBlock] = {}
         order: list[str] = []
         for section in sections:
@@ -231,6 +403,10 @@ class GrowwParser:
                 best_by_key[section.section_key] = section
                 continue
             existing = best_by_key[section.section_key]
-            if len(section.content) > len(existing.content):
+            if GrowwParser._section_content_score(
+                section.section_key, section.content
+            ) > GrowwParser._section_content_score(
+                existing.section_key, existing.content
+            ):
                 best_by_key[section.section_key] = section
         return [best_by_key[key] for key in order]
