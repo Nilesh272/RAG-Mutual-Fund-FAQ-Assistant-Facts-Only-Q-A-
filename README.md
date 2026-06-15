@@ -8,7 +8,9 @@ A RAG-based facts-only FAQ assistant for HDFC mutual fund schemes, using Groww s
 
 ```
 ├── .github/workflows/daily-ingest.yml   # Scheduler (9:15 AM IST daily)
-├── api/                                 # FastAPI server (`python -m api`)
+├── streamlit_app.py                     # Streamlit chat UI (deploy to Community Cloud)
+├── requirements.txt                     # Streamlit Cloud deps (-r requirements-api.txt)
+├── api/                                 # FastAPI server (alternative to Streamlit)
 ├── config/                              # Sources, embedding, generation, compliance
 ├── phases/
 │   ├── phase1_corpus/                   # ✅ Scheduler + Scraping
@@ -39,7 +41,21 @@ cp .env.example .env   # add Chroma Cloud credentials
 | `CHROMA_DATABASE` | Yes | e.g. `testDB` |
 | `OPENAI_API_KEY` | Optional | Only if `GENERATION_PROVIDER=openai` |
 
-## Run the chat app (Phases 4 + 5)
+## Run the chat app
+
+### Streamlit (recommended)
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add Chroma Cloud credentials
+
+streamlit run streamlit_app.py
+```
+
+Open **http://localhost:8501**. Deploy to [Streamlit Community Cloud](https://share.streamlit.io) — see [Deployment Plan](docs/deployment-plan.md).
+
+### Next.js + FastAPI (alternative)
 
 ```bash
 # Ensure index is populated first
@@ -49,7 +65,7 @@ python -m ingest run
 source .venv/bin/activate
 python -m api --host 127.0.0.1 --port 8000
 
-# Terminal 2 — Next.js dark-theme UI
+# Terminal 2 — Next.js UI
 cd phases/phase5_ui/web
 npm install
 npm run dev

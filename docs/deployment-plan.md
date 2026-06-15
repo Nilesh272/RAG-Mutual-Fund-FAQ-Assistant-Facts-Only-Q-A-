@@ -2,29 +2,28 @@
 
 ## 1. Document Purpose
 
-This document describes how to deploy the Mutual Fund FAQ Assistant to production using:
+This document describes how to deploy the Mutual Fund FAQ Assistant to production.
+
+**Recommended (single app):**
 
 | Component | Platform | Role |
 |-----------|----------|------|
+| **Chat UI + RAG** | Streamlit Community Cloud | `streamlit_app.py` — UI and orchestrator in one process |
 | **Scheduler / ingest** | GitHub Actions | Daily scrape → chunk → embed → Chroma Cloud upsert |
-| **Backend (API)** | Render | FastAPI chat orchestrator + RAG retrieval |
-| **Frontend (UI)** | Vercel | Next.js chat interface |
-| **Vector store** | Chroma Cloud | Shared index used by ingest and API |
+| **Vector store** | Chroma Cloud | Shared index used by ingest and the Streamlit app |
 
-The split keeps heavy offline work (scraping, embedding) off the API server, while the API only loads the BGE model for query embedding at request time.
+**Alternative (split stack):** FastAPI on Render + Next.js on Vercel — see [§7 Alternative — Render + Vercel](#7-alternative--render--vercel).
+
+Ingest stays on GitHub Actions in both setups. The Streamlit app loads BGE for query embedding at runtime; ingest embeds documents offline on CI runners.
 
 ---
 
-## 2. Target Architecture
+## 2. Target Architecture (Streamlit)
 
 ```mermaid
 flowchart LR
-    subgraph Vercel["Vercel"]
-        UI[Next.js UI<br/>phase5_ui/web]
-    end
-
-    subgraph Render["Render"]
-        API[FastAPI<br/>python -m api]
+    subgraph ST["Streamlit Community Cloud"]
+        APP[streamlit_app.py<br/>UI + ChatOrchestrator]
     end
 
     subgraph GHA["GitHub Actions"]
@@ -39,13 +38,13 @@ flowchart LR
         GROWW[Groww scheme pages]
     end
 
-    UI -->|"/api/* rewrite"| API
-    API -->|query embed + retrieve| VDB
+    USER[Browser] --> APP
+    APP -->|query embed + retrieve| VDB
     INGEST -->|scrape| GROWW
     INGEST -->|upsert chunks| VDB
 ```
 
-**Request path (chat):** Browser → Vercel → Render API → BGE query embed → Chroma retrieve → extractive generation → JSON response.
+**Request path (chat):** Browser → Streamlit → BGE query embed → Chroma retrieve → extractive generation → rendered reply.
 
 **Offline path (ingest):** GitHub Actions cron → scrape 5 Groww URLs → parse/chunk → BGE document embed → Chroma upsert.
 
@@ -57,25 +56,24 @@ Before deploying, ensure you have:
 
 1. **GitHub repository** with this codebase pushed to `main` (or your production branch).
 2. **Chroma Cloud** account and a database (e.g. `testDB`) with API credentials from [trychroma.com](https://www.trychroma.com/).
-3. **Render** account — [render.com](https://render.com).
-4. **Vercel** account — [vercel.com](https://vercel.com).
-5. **Initial index populated** — either run `python -m ingest run` locally once, or trigger the GitHub Actions workflow manually after secrets are configured.
+3. **Streamlit Community Cloud** account — [share.streamlit.io](https://share.streamlit.io) (linked to GitHub).
+4. **Initial index populated** — run `python -m ingest run` locally once, or trigger the GitHub Actions workflow after secrets are configured.
 
 ---
 
 ## 4. Shared Configuration (Chroma Cloud)
 
-Both GitHub Actions (ingest) and Render (API) must point at the **same** Chroma Cloud database and collection.
+Both GitHub Actions (ingest) and the Streamlit app must point at the **same** Chroma Cloud database and collection.
 
 | Variable | Example | Used by |
 |----------|---------|---------|
-| `CHROMA_API_KEY` | `ck-...` | Ingest + API |
-| `CHROMA_TENANT` | tenant UUID | Ingest + API |
-| `CHROMA_DATABASE` | `testDB` | Ingest + API |
-| `CHROMA_HOST` | `api.trychroma.com` | Ingest + API (default) |
-| `VECTOR_STORE_MODE` | `cloud` | Ingest + API |
+| `CHROMA_API_KEY` | `ck-...` | Ingest + Streamlit |
+| `CHROMA_TENANT` | tenant UUID | Ingest + Streamlit |
+| `CHROMA_DATABASE` | `testDB` | Ingest + Streamlit |
+| `CHROMA_HOST` | `api.trychroma.com` | Ingest + Streamlit (default) |
+| `VECTOR_STORE_MODE` | `cloud` | Ingest + Streamlit |
 
-Store these as secrets in GitHub and environment variables on Render. **Never commit real values to the repo.**
+Store these as secrets in GitHub (Actions) and Streamlit (app secrets). **Never commit real values to the repo.**
 
 ---
 
@@ -122,9 +120,74 @@ No Render or Vercel secrets are needed for the scheduler.
 
 ---
 
-## 6. Backend — Render
+## 6. Streamlit App — Community Cloud
 
-### 6.1 Service type
+The chat UI and RAG pipeline run in a single file: [`streamlit_app.py`](../streamlit_app.py). It calls `ChatOrchestrator` directly — no FastAPI or Next.js required.
+
+### 6.1 Local run
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add Chroma credentials
+
+streamlit run streamlit_app.py
+```
+
+Open **http://localhost:8501**.
+
+### 6.2 Deploy on Streamlit Community Cloud
+
+1. Push the repo to GitHub (include `streamlit_app.py`, `requirements.txt`, `.streamlit/config.toml`).
+2. Go to [share.streamlit.io](https://share.streamlit.io) → **Create app**.
+3. Connect your GitHub repo and branch.
+4. Set **Main file path:** `streamlit_app.py`
+5. **App URL** will be `https://<app-name>.streamlit.app`
+
+Streamlit auto-installs dependencies from root `requirements.txt` (which includes `-r requirements-api.txt` + `streamlit`).
+
+### 6.3 App secrets (Streamlit Cloud)
+
+In the app dashboard → **Settings → Secrets**, add:
+
+```toml
+CHROMA_API_KEY = "your-key"
+CHROMA_TENANT = "your-tenant-id"
+CHROMA_DATABASE = "testDB"
+CHROMA_HOST = "api.trychroma.com"
+VECTOR_STORE_MODE = "cloud"
+EMBEDDING_PROVIDER = "bge"
+GENERATION_PROVIDER = "extractive"
+```
+
+Optional: `OPENAI_API_KEY` only if `GENERATION_PROVIDER=openai`.
+
+### 6.4 Memory & cold starts
+
+The app loads **BAAI/bge-small-en-v1.5** on first chat (cached via `@st.cache_resource` after first load). Streamlit Community Cloud free apps have limited RAM; if the app crashes on first message:
+
+- Retry after redeploy (model may cache on disk within the session)
+- Consider Streamlit paid workspace for more resources
+- First load can take 30–60 seconds while the embedding model downloads
+
+The sidebar shows **index health** (chunk count from Chroma).
+
+### 6.5 Features mirrored from Next.js UI
+
+- Disclaimer banner (“Facts-only. No investment advice.”)
+- Example questions
+- Chat history per conversation (`st.session_state`)
+- **New conversation** button in sidebar
+- Scheme list and index status in sidebar
+- Source links on assistant replies
+
+---
+
+## 7. Alternative — Render + Vercel
+
+Use this split stack if you prefer the existing Next.js UI (`phases/phase5_ui/web`) and a separate FastAPI API.
+
+### 7.1 Backend — Render
 
 Create a **Web Service** (not a cron job — ingestion stays on GitHub Actions).
 
@@ -138,7 +201,7 @@ Create a **Web Service** (not a cron job — ingestion stays on GitHub Actions).
 
 Render injects `$PORT`; the API must bind to `0.0.0.0`, not `127.0.0.1`.
 
-### 6.2 Instance sizing
+### 7.2 Instance sizing
 
 The API loads **BAAI/bge-small-en-v1.5** locally for query embedding (`EMBEDDING_PROVIDER=bge`). Recommended:
 
@@ -149,7 +212,7 @@ The API loads **BAAI/bge-small-en-v1.5** locally for query embedding (`EMBEDDING
 
 Free-tier services **spin down after inactivity** (~15 s cold start + ~10 s first BGE load). Use a paid instance or an external uptime ping if you need consistent latency.
 
-### 6.3 Environment variables (Render)
+### 7.3 Environment variables (Render)
 
 | Variable | Value | Required |
 |----------|-------|----------|
@@ -165,7 +228,7 @@ Free-tier services **spin down after inactivity** (~15 s cold start + ~10 s firs
 
 `HF_HOME` keeps the embedding model cache inside the Render filesystem across restarts on the same instance (still re-downloads after redeploys unless you add a persistent disk).
 
-### 6.4 Health check
+### 7.4 Health check
 
 Configure Render health check path:
 
@@ -181,7 +244,7 @@ Expected response:
 
 `indexed_chunks` should be ≥ 1 after a successful ingest.
 
-### 6.5 API surface
+### 7.5 API surface
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -194,7 +257,7 @@ Expected response:
 
 CORS is already open (`allow_origins=["*"]`) in `phases/phase4_api/api/app.py`, so direct browser calls to Render work if needed. In production, traffic should go through Vercel rewrites.
 
-### 6.6 Known limitations on Render
+### 7.6 Known limitations on Render
 
 | Limitation | Impact | Mitigation (future) |
 |------------|--------|---------------------|
@@ -203,11 +266,7 @@ CORS is already open (`allow_origins=["*"]`) in `phases/phase4_api/api/app.py`, 
 | **Single instance** | No horizontal scaling without shared sessions | External session store |
 | **No ingest on Render** | Index only updates via GitHub Actions | By design |
 
----
-
-## 7. Frontend — Vercel
-
-### 7.1 Project setup
+### 7.7 Frontend — Vercel
 
 | Setting | Value |
 |---------|-------|
@@ -219,7 +278,7 @@ CORS is already open (`allow_origins=["*"]`) in `phases/phase4_api/api/app.py`, 
 
 Import the GitHub repo in Vercel and set the root directory to `phases/phase5_ui/web` — do not deploy from the monorepo root.
 
-### 7.2 Environment variables (Vercel)
+### 7.8 Environment variables (Vercel)
 
 | Variable | Value | Environment |
 |----------|-------|-------------|
@@ -234,14 +293,14 @@ destination: `${apiUrl}/api/:path*`
 
 After changing `API_URL`, **redeploy** the Vercel project so rewrites pick up the new backend URL.
 
-### 7.3 Domains
+### 7.9 Domains
 
 | Environment | Typical URL |
 |-------------|-------------|
 | Production | `https://<project>.vercel.app` or custom domain |
 | Preview | Per-PR preview URLs (optional separate `API_URL` for staging API) |
 
-### 7.4 Local vs production
+### 7.10 Local vs production (Render + Vercel)
 
 | | Local | Production |
 |---|-------|------------|
@@ -251,9 +310,7 @@ After changing `API_URL`, **redeploy** the Vercel project so rewrites pick up th
 
 ---
 
-## 8. Deployment Sequence
-
-Execute in this order to avoid a UI pointing at an empty or missing index:
+## 8. Deployment Sequence (Streamlit)
 
 ```mermaid
 flowchart TD
@@ -261,37 +318,36 @@ flowchart TD
     B --> C[3. Run ingest workflow manually]
     C --> D{validate-index OK?}
     D -->|No| C
-    D -->|Yes| E[4. Deploy Render API]
-    E --> F[5. Verify /api/health]
-    F --> G[6. Deploy Vercel UI with API_URL]
-    G --> H[7. Smoke-test chat on Vercel URL]
-    H --> I[8. Enable daily schedule / monitor Actions]
+    D -->|Yes| E[4. Deploy Streamlit app + add secrets]
+    E --> F[5. Open app URL — check sidebar index status]
+    F --> G[6. Send a test chat message]
+    G --> H[7. Monitor daily ingest on schedule]
 ```
 
 ### Smoke-test checklist
 
-- [ ] `GET https://<render>/api/health` → `status: ok`, `indexed_chunks > 0`
-- [ ] `POST https://<render>/api/chat` with `{"message":"What is the expense ratio of HDFC Mid Cap Fund?"}` → answer + citation
-- [ ] Open Vercel URL → disclaimer banner, health indicator green
-- [ ] Send a message in the UI → response with Groww citation link
-- [ ] GitHub Actions ingest run succeeds on schedule (or manual trigger)
+- [ ] GitHub Actions ingest completes with `validate-index` passing
+- [ ] Streamlit sidebar shows **Index OK** with `indexed_chunks > 0`
+- [ ] Ask “What is the expense ratio of HDFC Mid Cap Fund?” → answer + source link
+- [ ] **New conversation** clears the thread
+- [ ] Daily ingest succeeds on schedule (or manual trigger)
 
 ---
 
 ## 9. Secrets & Environment Matrix
 
-| Variable | GitHub Actions | Render | Vercel |
-|----------|:--------------:|:------:|:------:|
-| `CHROMA_API_KEY` | Secret | Env | — |
-| `CHROMA_TENANT` | Secret | Env | — |
-| `CHROMA_DATABASE` | Secret | Env | — |
-| `CHROMA_HOST` | Default in workflow | Env | — |
-| `EMBEDDING_PROVIDER` | `bge` in workflow | Env | — |
-| `GENERATION_PROVIDER` | — | Env | — |
-| `OPENAI_API_KEY` | — | Optional | — |
-| `HF_HOME` | Workflow env | Env | — |
-| `API_URL` | — | — | Env |
-| `FORCE_REINDEX` | Workflow input | — | — |
+| Variable | GitHub Actions | Streamlit | Render | Vercel |
+|----------|:--------------:|:---------:|:------:|:------:|
+| `CHROMA_API_KEY` | Secret | Secret | Env | — |
+| `CHROMA_TENANT` | Secret | Secret | Env | — |
+| `CHROMA_DATABASE` | Secret | Secret | Env | — |
+| `CHROMA_HOST` | Default in workflow | Secret | Env | — |
+| `EMBEDDING_PROVIDER` | `bge` in workflow | Secret | Env | — |
+| `GENERATION_PROVIDER` | — | Secret | Env | — |
+| `OPENAI_API_KEY` | — | Optional | Optional | — |
+| `HF_HOME` | Workflow env | — | Env | — |
+| `API_URL` | — | — | — | Env |
+| `FORCE_REINDEX` | Workflow input | — | — | — |
 
 ---
 
@@ -303,18 +359,24 @@ flowchart TD
 - **Failure alerts:** enable GitHub email notifications or a Slack webhook on workflow failure
 - **Artifacts:** `ingest-run-summary-<run_id>` for chunk counts and per-URL status
 
-### 10.2 Render (API)
+### 10.2 Streamlit (app)
+
+- App logs in Streamlit Cloud dashboard (OOM, import errors, Chroma auth failures)
+- Sidebar health indicator turns warning/error if Chroma is unreachable
+- First chat after cold start may be slow while BGE loads
+
+### 10.3 Render (API) — alternative stack only
 
 - Use Render dashboard metrics (CPU, memory, restarts)
 - Alert on health check failures
 - Watch for OOM kills when using BGE on small instances
 
-### 10.3 Vercel (UI)
+### 10.4 Vercel (UI) — alternative stack only
 
 - Deployment logs for build failures (often missing `API_URL` or wrong root directory)
 - Vercel Analytics (optional) for traffic
 
-### 10.4 Data freshness
+### 10.5 Data freshness
 
 Answers reflect the last successful ingest. The UI shows **last updated from sources** per response. If Groww pages change mid-day, users see stale data until the next **9:15 AM IST** run (or a manual `workflow_dispatch`).
 
@@ -337,8 +399,9 @@ Answers reflect the last successful ingest. The UI shows **last updated from sou
 
 | Layer | Rollback |
 |-------|----------|
-| **UI** | Redeploy previous Vercel deployment from dashboard |
-| **API** | Roll back to previous Render deploy |
+| **Streamlit app** | Reboot app or redeploy previous commit from Streamlit dashboard |
+| **UI (Vercel)** | Redeploy previous Vercel deployment |
+| **API (Render)** | Roll back to previous Render deploy |
 | **Index** | Re-run ingest with `force_reindex: false`; for bad upserts, use `CHROMA_RESET_COLLECTION=true` once then re-ingest |
 | **Scheduler** | Revert workflow file on `main`; disable schedule in workflow YAML if needed |
 
