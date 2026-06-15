@@ -15,5 +15,5 @@ vector_store:
   collection: mf_faq_hdfc_groww
   distance: cosine
   tenant: ""
-  database: mf-faq-prod
+  database: testDB
   host: api.trychroma.com

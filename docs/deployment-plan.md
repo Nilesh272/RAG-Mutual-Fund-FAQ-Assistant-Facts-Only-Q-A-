@@ -160,6 +160,10 @@ EMBEDDING_PROVIDER = "bge"
 GENERATION_PROVIDER = "extractive"
 ```
 
+**Important:** `CHROMA_DATABASE` must be **`testDB`** — the same value as GitHub Actions ingest secrets and your local `.env`. If this is missing or wrong, the sidebar will show **Index empty · 0 chunks**.
+
+See [`.streamlit/secrets.toml.example`](../.streamlit/secrets.toml.example) in the repo.
+
 Optional: `OPENAI_API_KEY` only if `GENERATION_PROVIDER=openai`.
 
 ### 6.4 Memory & cold starts

@@ -70,7 +70,7 @@ class EmbeddingService:
             collection=store_raw.get("collection", "mf_faq_hdfc_groww"),
             distance=store_raw.get("distance", "cosine"),
             tenant=store_raw.get("tenant", ""),
-            database=store_raw.get("database", "mf-faq-prod"),
+            database=store_raw.get("database", "testDB"),
             host=store_raw.get("host", "api.trychroma.com"),
         )
 

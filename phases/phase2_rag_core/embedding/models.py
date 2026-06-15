@@ -24,7 +24,7 @@ class VectorStoreConfig:
     collection: str = "mf_faq_hdfc_groww"
     distance: str = "cosine"
     tenant: str = ""
-    database: str = "mf-faq-prod"
+    database: str = "testDB"
     host: str = "api.trychroma.com"
 
 
