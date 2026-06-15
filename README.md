@@ -95,5 +95,6 @@ pytest tests/ -v
 
 ## Documentation
 
+- [Deployment Plan](docs/deployment-plan.md)
 - [RAG Architecture](docs/rag-architecture.md)
 - [Chunking & Embedding Architecture](docs/chunking-embedding-architecture.md)
